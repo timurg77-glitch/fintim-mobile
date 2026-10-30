@@ -36,7 +36,7 @@ $('send').onclick=()=>{
  try{if(!cat)throw Error('Сначала загрузите справочник.');if(records.length>=2000)throw Error('В истории 2000 записей. Сохраните копию и удалите уже полученные записи.');
  const payload=core.operation(cat,{Kind:kind,CategoryId:category?.Id,Subcategory:sub,SourceId:$('source').value,Date:$('date').value,Amount:$('amount').value,Note:$('note').value.trim()},uuid());
  const record={payload,category:category.Name,source:$('source').selectedOptions[0].textContent,saved:new Date().toISOString()};records.push(record);try{save();}catch(e){records.pop();throw e;}
- $('count').textContent=records.length;$('amount').value='';$('note').value='';amountConfirmed=false;updateAmountStep();transfer(record);
+ $('count').textContent=records.length;$('amount').value='';$('note').value='';amountConfirmed=false;updateAmountStep();focusAmount();transfer(record);
  }catch(e){notice(e.message);locked=false;$('send').disabled=false;}
 };
 function history(){
@@ -58,15 +58,17 @@ $('export').onclick=()=>exportRecords(false);$('share').onclick=()=>exportRecord
 $('historyButton').onclick=history;$('back').onclick=render;$('catalogFile').onchange=()=>loadCatalog($('catalogFile'));$('catalogAgain').onchange=()=>loadCatalog($('catalogAgain'));$('search').oninput=renderChoices;
 $('changeCategory').onclick=()=>{category=null;sub='';$('search').value='';renderChoices();};
 for(const [id,value] of [['expense','Расход'],['income','Доход']])$(id).onclick=()=>{kind=value;category=null;sub='';$('search').value='';$('expense').setAttribute('aria-pressed',String(kind==='Расход'));$('income').setAttribute('aria-pressed',String(kind==='Доход'));renderChoices();};
-$('amount').onblur=()=>{try{$('amount').value=Number(core.amount($('amount').value)).toLocaleString('ru-RU',{maximumFractionDigits:2});}catch{}};
+
 $('date').value=core.dateLocal();$('date').max=core.dateLocal();
 try{const saved=JSON.parse(localStorage.getItem(key)||'null');if(saved){if(saved.catalog)cat=core.catalog(saved.catalog);if(!Array.isArray(saved.records))throw Error('Повреждена история');records=saved.records;}}catch{damagedStorage=true;notice('Не удалось прочитать сохранённые данные. Не очищайте браузер; восстановите справочник и копию операций.');$('send').disabled=true;locked=true;}
 render();if(tg){tg.ready();tg.expand();}if(cat&&!damagedStorage)focusAmount();if(!onlineTelegram()&&!$('notice').textContent)notice('Форма открыта в браузере. Можно подготовить запись и сохранить файл. Отправка боту доступна через его кнопку «Добавить операцию».');
 
+function hideSystemKeyboard(){try{if(tg?.isVersionAtLeast?.('9.1'))tg.hideKeyboard?.();}catch{}}
 function focusAmount(){
  if(!cat||damagedStorage||$('entry').hidden)return;
- $('amount').focus({preventScroll:true});
- // iOS may require a direct tap before showing its keyboard; never steal focus later.
+ document.activeElement?.blur();hideSystemKeyboard();
+ $('amountPad').hidden=false;$('amount').setAttribute('aria-expanded','true');
+ $('amountHint').textContent='Введите сумму кнопками ниже и нажмите ✓.';
 }
 function updateAmountStep(){
  $('amountDone').setAttribute('aria-pressed',String(amountConfirmed));
@@ -79,14 +81,26 @@ function offerSubmit(){
 }
 function finishAmount(){
  try{
-  $('amount').value=Number(core.amount($('amount').value)).toLocaleString('ru-RU',{maximumFractionDigits:2});
-  amountConfirmed=true;$('amount').blur();document.activeElement?.blur();
-  if(tg?.isVersionAtLeast?.('9.1'))tg.hideKeyboard?.();
-  updateAmountStep();
+  const text=$('amount').value.replace(/,$/,'');
+  $('amount').value=Number(core.amount(text)).toLocaleString('ru-RU',{maximumFractionDigits:2});
+  amountConfirmed=true;document.activeElement?.blur();hideSystemKeyboard();
+  $('amountPad').hidden=true;$('amount').setAttribute('aria-expanded','false');
+  $('amountHint').textContent='Нажмите на сумму, чтобы исправить её.';
+  $('amountError').textContent='';updateAmountStep();
   const target=category&&sub?$('send'):$('categoryStep');
   target.focus({preventScroll:true});target.scrollIntoView({behavior:'smooth',block:'start'});
- }catch(e){notice(e.message);amountConfirmed=false;updateAmountStep();$('amount').focus();}
+ }catch(e){$('amountError').textContent=e.message;amountConfirmed=false;updateAmountStep();focusAmount();}
 }
-$('amountDone').onclick=finishAmount;
-$('amount').addEventListener('input',()=>{amountConfirmed=false;updateAmountStep();});
-$('amount').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();finishAmount();}});
+function amountKey(key){
+ $('amount').value=FinTimAmountPad.format(FinTimAmountPad.edit($('amount').value,key));
+ amountConfirmed=false;$('amountError').textContent='';updateAmountStep();
+}
+$('amountDone').onclick=finishAmount;$('padDone').onclick=finishAmount;
+$('amount').onclick=focusAmount;
+for(const b of document.querySelectorAll('[data-amount-key]'))b.onclick=()=>amountKey(b.dataset.amountKey);
+$('amount').addEventListener('keydown',e=>{
+ if(e.key==='Enter'){e.preventDefault();if($('amountPad').hidden)focusAmount();else finishAmount();}
+ else if(/^[0-9,.]$/.test(e.key)||e.key==='Backspace'||e.key==='Delete'){
+  e.preventDefault();focusAmount();$('amount').focus({preventScroll:true});amountKey(e.key==='Backspace'?'backspace':e.key==='Delete'?'clear':e.key);
+ }
+});
